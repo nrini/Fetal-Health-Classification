@@ -2,7 +2,7 @@
 
 Fetal health classification project using Random Forest in R.
 
-Line 41: update line to your appropriate working directory.
+Line 41: update line to your appropriate working directory to read the data.
 
 The data-set used is available on Kaggle below: 
 https://www.kaggle.com/datasets/andrewmvd/fetal-health-classification/data
