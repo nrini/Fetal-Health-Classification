@@ -1,0 +1,397 @@
+---
+title: "Classifying Fetal Health"
+author: "Noah Rini, Michael Carbone, & Jonathan Sedaka"
+date: "2023-12-01"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Installing/Loading Required Packages
+
+```{r}
+
+library(dplyr) # data manipulation
+library(tidyr) # data manipulation
+library(tibble) # creating dataframes
+library(rpart) # for creating decision trees
+install.packages("rpart.plot")
+library(rpart.plot)
+install.packages("randomForest")
+library(randomForest) # for creating random forests
+library(ggplot2) # creating plots
+install.packages("caret")
+library(caret) # classification & regression training
+library(knitr)
+library(gridExtra)
+library(nnet) # multinomial logistic regression
+install.packages("reshape2")
+library(reshape2)
+library(nnet)
+
+```
+
+# Importing Data
+
+```{r}
+
+getwd()
+setwd("~/Documents/DATA 502") # make sure to update working directory based on the files' location on your computer
+
+fetus <- read.csv("fetal_health.csv")
+
+```
+
+# Data Cleaning
+
+```{r}
+
+# no missing values, just want to get rid of unhelpful features for our analysis
+
+str(fetus)
+
+fetus <- fetus[, c(1:11, 22)]
+
+fetus$fetal_health[fetus$fetal_health == 1] <- "Normal"
+fetus$fetal_health[fetus$fetal_health == 2] <- "Suspect"
+fetus$fetal_health[fetus$fetal_health == 3] <- "Pathological"
+
+fetus$fetal_health <- as.factor(fetus$fetal_health)
+
+fetus = fetus %>% rename(pct_ab_STV = abnormal_short_term_variability,
+                         mv_STV = mean_value_of_short_term_variability,
+                         pct_ab_LTV = percentage_of_time_with_abnormal_long_term_variability,
+                         mv_LTV = mean_value_of_long_term_variability)
+
+```
+
+# Exploratory Preliminary Analysis
+
+```{r}
+
+data <- fetus
+
+# Summary Statistics
+summary(data)
+summary_stats <- data %>% 
+  summarise(across(where(is.numeric), list(min = min, q1 = ~quantile(., 0.25), 
+                                           median = median, mean = mean, 
+                                           q3 = ~quantile(., 0.75), max = max)))
+
+# Display the summary statistics in a nicer format 
+kable(summary_stats)
+
+# Correlation Analysis
+correlation_matrix <- cor(data[, sapply(data, is.numeric)])
+print(correlation_matrix)
+
+# Data Visualization
+
+# Calculate correlation matrix
+numeric_data <- data[, sapply(data, is.numeric)]
+cor_matrix <- cor(numeric_data, use = "complete.obs")
+
+cor_melted <- reshape2::melt(cor_matrix)
+
+# Create heatmap
+ggplot(cor_melted, aes(Var1, Var2, fill = value)) +
+    geom_tile(color = "white") +
+    scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0, limit = c(-1, 1)) +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          axis.title.x = element_blank(),
+          axis.title.y = element_blank()) +
+    labs(fill = "Correlation")
+
+
+# Get all numeric features
+numeric_features <- names(data)[sapply(data, is.numeric)]
+
+# Loop to create plots for each feature
+for (feature in numeric_features) {
+    # Histogram
+    hist_plot <- ggplot(data, aes_string(x = feature)) +
+                 geom_histogram(bins = 30, fill = "blue", color = "black") +
+                 labs(title = paste("Histogram of", feature), x = feature, y = "Count") +
+                 theme_minimal() +
+                 theme(plot.margin = margin(5, 5, 5, 5)) 
+
+    # Box Plot
+    box_plot <- ggplot(data, aes_string(x = "fetal_health", y = feature, fill = "fetal_health")) +
+                geom_boxplot() +
+                labs(title = paste("Box Plot of", feature, "by Fetal Health Class"), x = "Fetal Health Class", y = feature) +
+                theme_minimal() +
+                theme(plot.margin = margin(5, 5, 5, 5)) 
+
+    # Combine plots and display with space
+    grid.arrange(hist_plot, box_plot, ncol = 2,
+                 top = feature, 
+                 widths = c(1, 1), 
+                 padding = unit(1, "lines"))
+}
+
+```
+
+```{r}
+
+# MULTINOMIAL LOGISTIC REGRESSION:
+    
+# Splitting data into training and testing sets 
+set.seed(123)  
+train_indices <- sample(1:nrow(data), size = 0.75 * nrow(data))
+train_data <- data[train_indices, ]
+test_data <- data[-train_indices, ]
+
+# Fitting a multinomial logistic regression model
+multinom_model <- multinom(fetal_health ~ ., data = train_data)
+
+# Summary of the model
+summary(multinom_model)
+
+# Predicting on the test set
+predictions <- predict(multinom_model, newdata = test_data)
+
+# Evaluating the model
+conf_matrix <- table(test_data$fetal_health, predictions)
+accuracy <- sum(diag(conf_matrix)) / sum(conf_matrix)
+print(paste("Accuracy:", accuracy))
+
+print(conf_matrix)
+
+summary(multinom_model)
+
+
+```
+
+# Splitting Data into Training & Testing Sets
+
+```{r}
+
+set.seed(54321)
+
+split <- 0.75
+rows  <- nrow(fetus)
+
+train.entries <- sample(rows, rows*split)
+
+fetus.train <- fetus[train.entries, ]
+fetus.valid  <- fetus[-train.entries,  ]
+
+```
+
+# Creating Decision Tree (based on entropy/information gain)
+
+```{r}
+
+tree.IG <- rpart(fetal_health ~ ., data=fetus.train, parms = list(split = "information"))
+
+rpart.plot(
+  tree.IG,
+  type = 3,  # Use type 3 for text labels
+  extra = 2,  # Use extra 2 for centered text
+  under = TRUE,  # Draw the tree upside down for better visualization
+  fallen.leaves = TRUE,  # Align the leaves horizontally
+  cex = 0.9,  # Adjust text size
+)
+
+fetusTREE.train.predict <- fetus.train %>% 
+  mutate(yhat = predict(tree.IG, type="class", newdata=fetus.train))
+fetusTREE.valid.predict <- fetus.valid %>% 
+  mutate(yhat = predict(tree.IG, type="class", newdata=fetus.valid))
+
+fetusTREE.valid.predict %>% group_by(fetal_health) %>% summarize(null.acc = n()/nrow(.)) %>% pull()
+fetusTREE.valid.predict %>% summarize(accuracy=  sum(yhat == fetal_health)/nrow(.)   ) %>% pull()
+
+fetusTREE.train.predict %>% summarize(accuracy=  sum(yhat == fetal_health)/nrow(.)   ) %>% pull()
+
+```
+
+# Testing Accuracy of Less Frequent Classes (Suspect & Pathological)
+
+```{r}
+
+# Two metrics: Precision and Recall
+
+# Precision: Ratio of correctly predicted minority class over total predicted minority classes
+# False positive ratio
+# High precision = low false positives
+
+# Recall: ratio of correctly predicted minority classes over total observed minority classes
+# False negative ratio
+# High recall = low false negatives
+################################################################################
+# Suspect:
+# Precision
+TreeSusPrsn = nrow(fetusTREE.valid.predict %>% filter(yhat == "Suspect", fetal_health == "Suspect")) / nrow(fetusTREE.valid.predict %>% filter(yhat == "Suspect"))
+TreeSusPrsn
+
+# Recall
+TreeSusRcl = nrow(fetusTREE.valid.predict %>% filter(yhat == "Suspect", fetal_health == "Suspect")) / nrow(fetusTREE.valid.predict %>% filter(fetal_health == "Suspect"))
+TreeSusRcl
+
+# Pathological:
+# Precision
+TreePathPrsn = nrow(fetusTREE.valid.predict %>% filter(yhat == "Pathological", fetal_health == "Pathological")) / nrow(fetusTREE.valid.predict %>% filter(yhat == "Pathological"))
+TreePathPrsn
+
+# Recall
+TreePathRcl = nrow(fetusTREE.valid.predict %>% filter(yhat == "Pathological", fetal_health == "Pathological")) / nrow(fetusTREE.valid.predict %>% filter(fetal_health == "Pathological"))
+TreePathRcl
+
+```
+
+# Creating Random Forest
+
+```{r}
+
+forest.output <- randomForest(fetal_health ~ ., data = fetus.train) #importance = TRUE, proximity = TRUE)
+
+forest.output # model accuracy is about 94%
+
+fetusFRST.train.predict <- fetus.train %>% 
+  mutate(yhat = predict(forest.output, type="class", newdata=fetus.train))
+fetusFRST.valid.predict <- fetus.valid %>% 
+  mutate(yhat = predict(forest.output, type="class", newdata=fetus.valid))
+
+fetusFRST.valid.predict %>% group_by(fetal_health) %>% summarize(null.acc = n()/nrow(.)) %>% pull()
+fetusFRST.valid.predict %>% summarize(accuracy=  sum(yhat == fetal_health)/nrow(.)   ) %>% pull()
+
+fetusFRST.train.predict %>% summarize(accuracy=  sum(yhat == fetal_health)/nrow(.)   ) %>% pull()
+
+errors = fetusFRST.valid.predict %>% filter(fetal_health != yhat)
+
+```
+
+# Finding Optimal Number of Trees and Features
+
+```{r}
+
+OOB <- forest.output$err.rate[,1]
+Normal <- forest.output$err.rate[,2]
+Pathological <- forest.output$err.rate[,3]
+Suspect <- forest.output$err.rate[,4]
+
+errors <- data.frame(OOB, Normal, Pathological, Suspect)
+
+errors <- errors %>% pivot_longer(cols = c(OOB, Normal, Pathological, Suspect), names_to = "Type", values_to = "Errors")
+
+errors$Trees <- rep(1:500, each = 4)
+
+errors$Type <- factor(errors$Type, levels = c("OOB", "Normal", "Pathological", "Suspect"))
+
+ggplot(errors, aes(x = Trees, y = Errors)) +
+  geom_line(aes(color = Type)) + labs(title = "Error Rates Based on Number of Decision Trees in RF",
+                                      x = "Number of Trees", y = "Error Rate")
+
+errors$Trees[errors$Errors == min(errors$Errors[errors$Type == "Suspect"])]
+  
+
+# error rate based on number of features:
+
+oob.errors <- NULL
+for (i in 1:10) {
+  model <- randomForest(fetal_health ~ ., data = fetus.train, mtry = i, ntrees = 500)
+  oob.errors <- c(oob.errors, model$err.rate[nrow(model$err.rate), 1])
+}
+oob.errors
+
+# confirms that 3 features for each tree is best choice
+
+```
+
+# Testing Accuracy of Less Frequent Classes (Suspect & Pathological)
+
+```{r}
+
+# Suspect precision
+correct_suspect = nrow(fetusFRST.valid.predict %>% filter(yhat == "Suspect", fetal_health == "Suspect"))
+predicted_suspect = nrow(fetusFRST.valid.predict %>% filter(yhat == "Suspect"))
+FrstSusPrsn = correct_suspect / predicted_suspect
+FrstSusPrsn
+
+# Pathological precision
+correct_pathological = nrow(fetusFRST.valid.predict %>% filter(yhat == "Pathological", fetal_health == "Pathological"))
+predicted_pathological = nrow(fetusFRST.valid.predict %>% filter(yhat == "Pathological"))
+FrstPathPrsn = correct_pathological / predicted_pathological
+FrstPathPrsn
+
+# Suspect recall
+observed_suspect = nrow(fetusFRST.valid.predict %>% filter(fetal_health == "Suspect"))
+FrstSusRcl = correct_suspect / observed_suspect
+FrstSusRcl
+
+# Pathological recall
+observed_pathological = nrow(fetusFRST.valid.predict %>% filter(fetal_health == "Pathological"))
+FrstPathRcl = correct_pathological / observed_pathological
+FrstPathRcl
+
+```
+
+# Comparing Multinomial Logistic Regression to Random Forest
+
+```{r}
+
+# Accuracy of Multinomial Logistic Regression Model
+logistic_accuracy <- sum(diag(conf_matrix)) / sum(conf_matrix)
+
+# Accuracy of Random Forest Model
+random_forest_accuracy <- 1 - forest.output$err.rate[nrow(forest.output$err.rate), "OOB"]
+
+# Preparing data for plotting
+accuracy_data <- data.frame(
+  Model = c("Multinomial Logistic Regression", "Random Forest"),
+  Accuracy = c(logistic_accuracy, random_forest_accuracy)
+)
+
+ggplot(accuracy_data, aes(x = Model, y = Accuracy, fill = Model)) +
+  geom_bar(stat = "identity", position = position_dodge(), width = 0.5) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  coord_cartesian(ylim = c(0.5, 1)) +  # Zoom in without removing data
+  labs(title = "Model Accuracy Comparison", 
+       x = "Model", 
+       y = "Accuracy (%)") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+```
+
+# Performing Cross Validation
+
+```{r}
+
+library(tibble)
+library(randomForest)
+library(caret)
+
+# Read and prepare the data
+data <- read.csv("fetal_health.csv")
+data <- tibble(data)
+
+data <- data[, c(1:11, 22)]
+
+# Change class column values for classification model
+data$fetal_health <- factor(data$fetal_health, 
+                            levels = c(1, 2, 3), 
+                            labels = c("Normal", "Suspect", "Pathological"))
+
+# Set up cross-validation
+control <- trainControl(method = "cv", number = 10)
+
+# Define a grid of mtry values to try
+mtryGrid <- expand.grid(.mtry = 1:8) 
+
+# Train the Random Forest model with cross-validation and multiple mtry values
+set.seed(123)
+forest_cv_mtry <- train(fetal_health ~ ., data = data, method = "rf", 
+                        trControl = control, tuneGrid = mtryGrid)
+
+# Print and plot the model
+print(forest_cv_mtry)
+plot(forest_cv_mtry)
+
+# Access the results
+forest_cv_mtry$results
+
+```
